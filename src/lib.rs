@@ -2,6 +2,7 @@
 
 mod errors;
 mod events;
+mod history;
 mod storage;
 mod types;
 
@@ -9,15 +10,16 @@ mod types;
 mod test;
 
 use soroban_sdk::{contract, contractimpl, Address, Env};
+use soroban_sdk::token::TokenClient;
 
 pub use errors::ContractError;
-pub use types::{DisputeResolution, Trade, TradeStatus};
+pub use types::{DisputeResolution, HistoryFilter, HistoryPage, SortOrder, Trade, TradeStatus, TransactionRecord};
 
 use storage::{
-    get_accumulated_fees, get_admin, get_fee_bps, get_trade, get_trade_counter, get_usdc_token,
-    has_arbitrator, has_initialized, increment_trade_counter, is_initialized, remove_arbitrator,
-    save_arbitrator, save_trade, set_accumulated_fees, set_admin, set_fee_bps, set_initialized,
-    set_trade_counter, set_usdc_token,
+    get_accumulated_fees, get_admin, get_fee_bps, get_trade, get_usdc_token,
+    has_arbitrator, increment_trade_counter, index_trade_for_address,
+    is_initialized, remove_arbitrator, save_arbitrator, save_trade, set_accumulated_fees,
+    set_admin, set_fee_bps, set_initialized, set_trade_counter, set_usdc_token,
 };
 
 #[contract]
@@ -30,20 +32,16 @@ impl StellarEscrowContract {
         if is_initialized(&env) {
             return Err(ContractError::AlreadyInitialized);
         }
-
         if fee_bps > 10000 {
             return Err(ContractError::InvalidFeeBps);
         }
-
         admin.require_auth();
-
         set_admin(&env, &admin);
         set_usdc_token(&env, &usdc_token);
         set_fee_bps(&env, fee_bps);
         set_trade_counter(&env, 0);
         set_accumulated_fees(&env, 0);
         set_initialized(&env);
-
         Ok(())
     }
 
@@ -52,13 +50,10 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         let admin = get_admin(&env)?;
         admin.require_auth();
-
         save_arbitrator(&env, &arbitrator);
         events::emit_arbitrator_registered(&env, arbitrator);
-
         Ok(())
     }
 
@@ -67,13 +62,10 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         let admin = get_admin(&env)?;
         admin.require_auth();
-
         remove_arbitrator(&env, &arbitrator);
         events::emit_arbitrator_removed(&env, arbitrator);
-
         Ok(())
     }
 
@@ -82,17 +74,13 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         if fee_bps > 10000 {
             return Err(ContractError::InvalidFeeBps);
         }
-
         let admin = get_admin(&env)?;
         admin.require_auth();
-
         set_fee_bps(&env, fee_bps);
         events::emit_fee_updated(&env, fee_bps);
-
         Ok(())
     }
 
@@ -101,23 +89,17 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         let admin = get_admin(&env)?;
         admin.require_auth();
-
         let fees = get_accumulated_fees(&env)?;
         if fees == 0 {
             return Err(ContractError::NoFeesToWithdraw);
         }
-
         let token = get_usdc_token(&env)?;
-        let token_client = token::Client::new(&env, &token);
-
+        let token_client = TokenClient::new(&env, &token);
         token_client.transfer(&env.current_contract_address(), &to, &(fees as i128));
-
         set_accumulated_fees(&env, 0);
         events::emit_fees_withdrawn(&env, fees, to);
-
         Ok(())
     }
 
@@ -132,19 +114,15 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         if amount == 0 {
             return Err(ContractError::InvalidAmount);
         }
-
         seller.require_auth();
-
         if let Some(ref arb) = arbitrator {
             if !has_arbitrator(&env, arb) {
                 return Err(ContractError::ArbitratorNotRegistered);
             }
         }
-
         let trade_id = increment_trade_counter(&env)?;
         let fee_bps = get_fee_bps(&env)?;
         let fee = amount
@@ -153,6 +131,7 @@ impl StellarEscrowContract {
             .checked_div(10000)
             .ok_or(ContractError::Overflow)?;
 
+        let now = env.ledger().sequence();
         let trade = Trade {
             id: trade_id,
             seller: seller.clone(),
@@ -161,11 +140,15 @@ impl StellarEscrowContract {
             fee,
             arbitrator,
             status: TradeStatus::Created,
+            created_at: now,
+            updated_at: now,
         };
 
         save_trade(&env, trade_id, &trade);
+        // Index trade for both parties so history lookups work for either address
+        index_trade_for_address(&env, &seller, trade_id);
+        index_trade_for_address(&env, &buyer, trade_id);
         events::emit_trade_created(&env, trade_id, seller, buyer, amount);
-
         Ok(trade_id)
     }
 
@@ -174,28 +157,22 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         let mut trade = get_trade(&env, trade_id)?;
-
         if trade.status != TradeStatus::Created {
             return Err(ContractError::InvalidStatus);
         }
-
         trade.buyer.require_auth();
-
         let token = get_usdc_token(&env)?;
-        let token_client = token::Client::new(&env, &token);
-
+        let token_client = TokenClient::new(&env, &token);
         token_client.transfer(
             &trade.buyer,
             &env.current_contract_address(),
             &(trade.amount as i128),
         );
-
         trade.status = TradeStatus::Funded;
+        trade.updated_at = env.ledger().sequence();
         save_trade(&env, trade_id, &trade);
         events::emit_trade_funded(&env, trade_id);
-
         Ok(())
     }
 
@@ -204,19 +181,15 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         let mut trade = get_trade(&env, trade_id)?;
-
         if trade.status != TradeStatus::Funded {
             return Err(ContractError::InvalidStatus);
         }
-
         trade.seller.require_auth();
-
         trade.status = TradeStatus::Completed;
+        trade.updated_at = env.ledger().sequence();
         save_trade(&env, trade_id, &trade);
         events::emit_trade_completed(&env, trade_id);
-
         Ok(())
     }
 
@@ -225,62 +198,46 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         let trade = get_trade(&env, trade_id)?;
-
         if trade.status != TradeStatus::Completed {
             return Err(ContractError::InvalidStatus);
         }
-
         trade.buyer.require_auth();
-
         let token = get_usdc_token(&env)?;
-        let token_client = token::Client::new(&env, &token);
-
+        let token_client = TokenClient::new(&env, &token);
         let payout = trade.amount.checked_sub(trade.fee).ok_or(ContractError::Overflow)?;
-
         token_client.transfer(
             &env.current_contract_address(),
             &trade.seller,
             &(payout as i128),
         );
-
         let current_fees = get_accumulated_fees(&env)?;
         let new_fees = current_fees.checked_add(trade.fee).ok_or(ContractError::Overflow)?;
         set_accumulated_fees(&env, new_fees);
-
         events::emit_trade_confirmed(&env, trade_id, payout, trade.fee);
-
         Ok(())
     }
 
     /// Raise a dispute
-    pub fn raise_dispute(env: Env, trade_id: u64) -> Result<(), ContractError> {
+    pub fn raise_dispute(env: Env, trade_id: u64, caller: Address) -> Result<(), ContractError> {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         let mut trade = get_trade(&env, trade_id)?;
-
         if trade.status != TradeStatus::Funded && trade.status != TradeStatus::Completed {
             return Err(ContractError::InvalidStatus);
         }
-
         if trade.arbitrator.is_none() {
             return Err(ContractError::ArbitratorNotRegistered);
         }
-
-        let caller = env.invoker();
         if caller != trade.buyer && caller != trade.seller {
             return Err(ContractError::Unauthorized);
         }
-
         caller.require_auth();
-
         trade.status = TradeStatus::Disputed;
+        trade.updated_at = env.ledger().sequence();
         save_trade(&env, trade_id, &trade);
         events::emit_dispute_raised(&env, trade_id, caller);
-
         Ok(())
     }
 
@@ -293,38 +250,28 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         let trade = get_trade(&env, trade_id)?;
-
         if trade.status != TradeStatus::Disputed {
             return Err(ContractError::InvalidStatus);
         }
-
         let arbitrator = trade.arbitrator.ok_or(ContractError::ArbitratorNotRegistered)?;
         arbitrator.require_auth();
-
         let token = get_usdc_token(&env)?;
-        let token_client = token::Client::new(&env, &token);
-
+        let token_client = TokenClient::new(&env, &token);
         let recipient = match resolution {
             DisputeResolution::ReleaseToBuyer => trade.buyer.clone(),
             DisputeResolution::ReleaseToSeller => trade.seller.clone(),
         };
-
         let payout = trade.amount.checked_sub(trade.fee).ok_or(ContractError::Overflow)?;
-
         token_client.transfer(
             &env.current_contract_address(),
             &recipient,
             &(payout as i128),
         );
-
         let current_fees = get_accumulated_fees(&env)?;
         let new_fees = current_fees.checked_add(trade.fee).ok_or(ContractError::Overflow)?;
         set_accumulated_fees(&env, new_fees);
-
         events::emit_dispute_resolved(&env, trade_id, resolution, recipient);
-
         Ok(())
     }
 
@@ -333,21 +280,21 @@ impl StellarEscrowContract {
         if !is_initialized(&env) {
             return Err(ContractError::NotInitialized);
         }
-
         let mut trade = get_trade(&env, trade_id)?;
-
         if trade.status != TradeStatus::Created {
             return Err(ContractError::InvalidStatus);
         }
-
         trade.seller.require_auth();
-
         trade.status = TradeStatus::Cancelled;
+        trade.updated_at = env.ledger().sequence();
         save_trade(&env, trade_id, &trade);
         events::emit_trade_cancelled(&env, trade_id);
-
         Ok(())
     }
+
+    // -------------------------------------------------------------------------
+    // Query functions
+    // -------------------------------------------------------------------------
 
     /// Get trade details
     pub fn get_trade(env: Env, trade_id: u64) -> Result<Trade, ContractError> {
@@ -561,6 +508,37 @@ impl StellarEscrowContract {
     }
 }
 
-mod token {
-    soroban_sdk::contractimport!(file = "./token.wasm");
+    // -------------------------------------------------------------------------
+    // Transaction history (Issue #38)
+    // -------------------------------------------------------------------------
+
+    /// Return paginated, filtered, sorted transaction history for an address.
+    ///
+    /// - `address`  : the seller or buyer address
+    /// - `filter`   : status / ledger-range filters (use None fields to skip)
+    /// - `sort`     : SortOrder::Ascending or SortOrder::Descending by created_at
+    /// - `offset`   : records to skip (for pagination)
+    /// - `limit`    : max records to return (capped at 100)
+    pub fn get_transaction_history(
+        env: Env,
+        address: Address,
+        filter: HistoryFilter,
+        sort: SortOrder,
+        offset: u32,
+        limit: u32,
+    ) -> Result<HistoryPage, ContractError> {
+        history::get_history(&env, address, filter, sort, offset, limit)
+    }
+
+    /// Export transaction history for an address as a CSV string.
+    ///
+    /// Columns: trade_id,amount,fee,status,created_at,updated_at
+    /// Status values: 0=Created 1=Funded 2=Completed 3=Disputed 4=Cancelled
+    pub fn export_transaction_csv(
+        env: Env,
+        address: Address,
+        filter: HistoryFilter,
+    ) -> Result<soroban_sdk::String, ContractError> {
+        history::export_csv(&env, address, filter)
+    }
 }
