@@ -28,6 +28,12 @@ pub enum AppError {
 
     #[error("Internal server error")]
     InternalServerError,
+
+    #[error("Rate limit exceeded")]
+    RateLimited,
+
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
 }
 
 impl IntoResponse for AppError {
@@ -40,6 +46,8 @@ impl IntoResponse for AppError {
             AppError::InvalidEventData(_) => (StatusCode::BAD_REQUEST, "Invalid event data"),
             AppError::EventNotFound => (StatusCode::NOT_FOUND, "Event not found"),
             AppError::InternalServerError => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded"),
+            AppError::Forbidden(_) => (StatusCode::FORBIDDEN, "Forbidden"),
         };
 
         let body = Json(json!({

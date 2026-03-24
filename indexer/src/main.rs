@@ -2,10 +2,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-    routing::{get, post},
+    middleware,
+    routing::{delete, get, post},
     Router,
 };
 use clap::Parser;
@@ -20,6 +18,8 @@ mod error;
 mod event_monitor;
 mod handlers;
 mod models;
+mod rate_limit;
+mod rate_limit_handlers;
 mod websocket;
 
 #[cfg(test)]
@@ -29,6 +29,8 @@ use config::Config;
 use database::Database;
 use event_monitor::EventMonitor;
 use handlers::*;
+use rate_limit::RateLimiter;
+use rate_limit_handlers::*;
 use websocket::WebSocketManager;
 
 #[derive(Parser)]
@@ -63,6 +65,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, _rx) = broadcast::channel(100);
     let ws_manager = Arc::new(WebSocketManager::new(tx.clone()));
 
+    // Initialize rate limiter
+    let rate_limiter = Arc::new(RateLimiter::new(config.rate_limit.clone()));
+
     // Initialize event monitor
     let event_monitor = EventMonitor::new(
         config.stellar.clone(),
@@ -78,6 +83,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Build application with routes
+    let admin_router = Router::new()
+        .route("/admin/rate-limits", get(get_rate_limit_stats))
+        .route("/admin/rate-limits/whitelist", post(add_to_whitelist).delete(remove_from_whitelist))
+        .route("/admin/rate-limits/blacklist", post(add_to_blacklist).delete(remove_from_blacklist))
+        .route("/admin/rate-limits/tier", post(set_ip_tier))
+        .with_state(rate_limiter.clone());
+
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/events", get(get_events))
@@ -86,18 +98,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/events/type/:event_type", get(get_events_by_type))
         .route("/events/replay", post(replay_events))
         .route("/ws", get(ws_handler))
-        .layer(CorsLayer::permissive())
         .with_state(AppState {
             database,
             ws_manager,
-        });
+        })
+        .merge(admin_router)
+        .layer(middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit_middleware,
+        ))
+        .layer(CorsLayer::permissive());
 
     // Start server
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
     info!("Starting server on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
     // Wait for monitor to finish (shouldn't happen in normal operation)
     monitor_handle.await?;
