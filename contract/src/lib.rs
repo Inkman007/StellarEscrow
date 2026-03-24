@@ -22,6 +22,10 @@ pub use types::{
 };
 
 use storage::{
+    get_admin, get_currency_fees, get_fee_bps, get_trade, get_usdc_token, has_arbitrator,
+    has_initialized, increment_trade_counter, is_initialized, is_paused, remove_arbitrator,
+    save_arbitrator, save_trade, set_accumulated_fees, set_admin, set_currency_fees, set_fee_bps,
+    set_initialized, set_paused, set_trade_counter, set_usdc_token,
     add_accumulated_fees, get_accumulated_fees, get_admin, get_fee_bps, get_trade,
     get_usdc_token, has_arbitrator, increment_trade_counter, is_initialized,
     is_paused, remove_arbitrator, save_arbitrator, save_trade, set_accumulated_fees, set_admin,
@@ -134,20 +138,43 @@ impl StellarEscrowContract {
         Ok(())
     }
 
-    /// Withdraw accumulated fees (admin only)
+    /// Withdraw accumulated fees for USDC (admin only) — backward-compatible
     pub fn withdraw_fees(env: Env, to: Address) -> Result<(), ContractError> {
         require_initialized(&env)?;
         let admin = get_admin(&env)?;
         admin.require_auth();
-        let fees = get_accumulated_fees(&env)?;
+        let token = get_usdc_token(&env)?;
+        Self::withdraw_fees_for_currency_inner(&env, &admin, &token, to)
+    }
+
+    /// Withdraw accumulated fees for a specific currency (admin only)
+    pub fn withdraw_fees_for_currency(env: Env, currency: Address, to: Address) -> Result<(), ContractError> {
+        if !is_initialized(&env) {
+            return Err(ContractError::NotInitialized);
+        }
+        let admin = get_admin(&env)?;
+        admin.require_auth();
+        Self::withdraw_fees_for_currency_inner(&env, &admin, &currency, to)
+    }
+
+    fn withdraw_fees_for_currency_inner(
+        env: &Env,
+        _admin: &Address,
+        currency: &Address,
+        to: Address,
+    ) -> Result<(), ContractError> {
+        let fees = get_currency_fees(env, currency);
         if fees == 0 {
             return Err(ContractError::NoFeesToWithdraw);
         }
+        let token_client = token::Client::new(env, currency);
         let token = get_usdc_token(&env)?;
         let token_client = TokenClient::new(&env, &token);
         token_client.transfer(&env.current_contract_address(), &to, &(fees as i128));
-        set_accumulated_fees(&env, 0);
-        events::emit_fees_withdrawn(&env, fees, to);
+        set_currency_fees(env, currency, 0);
+        // Keep legacy ACCUMULATED_FEES in sync when withdrawing USDC
+        // (best-effort; callers should prefer get_fees_for_currency)
+        events::emit_fees_withdrawn(env, fees, to);
         Ok(())
     }
 
@@ -158,6 +185,8 @@ impl StellarEscrowContract {
         buyer: Address,
         amount: u64,
         arbitrator: Option<Address>,
+        currency: Option<Address>,
+        metadata: Option<TradeMetadata>,
         metadata: OptionalMetadata,
     ) -> Result<u64, ContractError> {
         require_initialized(&env)?;
@@ -171,6 +200,11 @@ impl StellarEscrowContract {
                 return Err(ContractError::ArbitratorNotRegistered);
             }
         }
+        if let Some(ref meta) = metadata {
+            validate_metadata(meta)?;
+        }
+        // Default to USDC when no currency specified (backward compat)
+        let token = currency.unwrap_or(get_usdc_token(&env)?);
         validate_metadata(&metadata)?;
         let trade_id = increment_trade_counter(&env)?;
         let fee = calc_fee(&env, &seller, amount)?;
@@ -182,6 +216,7 @@ impl StellarEscrowContract {
             fee,
             arbitrator,
             status: TradeStatus::Created,
+            currency: token,
             metadata,
         };
         save_trade(&env, trade_id, &trade);
@@ -198,6 +233,7 @@ impl StellarEscrowContract {
             return Err(ContractError::InvalidStatus);
         }
         trade.buyer.require_auth();
+        let token_client = token::Client::new(&env, &trade.currency);
         let token = get_usdc_token(&env)?;
         let token_client = TokenClient::new(&env, &token);
         token_client.transfer(
@@ -235,6 +271,16 @@ impl StellarEscrowContract {
             return Err(ContractError::InvalidStatus);
         }
         trade.buyer.require_auth();
+        let token_client = token::Client::new(&env, &trade.currency);
+        let payout = trade.amount.checked_sub(trade.fee).ok_or(ContractError::Overflow)?;
+        token_client.transfer(
+            &env.current_contract_address(),
+            &trade.seller,
+            &(payout as i128),
+        );
+        let current_fees = get_currency_fees(&env, &trade.currency);
+        let new_fees = current_fees.checked_add(trade.fee).ok_or(ContractError::Overflow)?;
+        set_currency_fees(&env, &trade.currency, new_fees);
         let payout = trade.amount.checked_sub(trade.fee).ok_or(ContractError::Overflow)?;
         let token = get_usdc_token(&env)?;
         let token_client = TokenClient::new(&env, &token);
@@ -282,11 +328,21 @@ impl StellarEscrowContract {
         }
         let arbitrator = trade.arbitrator.ok_or(ContractError::ArbitratorNotRegistered)?;
         arbitrator.require_auth();
+        let token_client = token::Client::new(&env, &trade.currency);
         let payout = trade.amount.checked_sub(trade.fee).ok_or(ContractError::Overflow)?;
         let recipient = match resolution {
             DisputeResolution::ReleaseToBuyer => trade.buyer.clone(),
             DisputeResolution::ReleaseToSeller => trade.seller.clone(),
         };
+        let payout = trade.amount.checked_sub(trade.fee).ok_or(ContractError::Overflow)?;
+        token_client.transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &(payout as i128),
+        );
+        let current_fees = get_currency_fees(&env, &trade.currency);
+        let new_fees = current_fees.checked_add(trade.fee).ok_or(ContractError::Overflow)?;
+        set_currency_fees(&env, &trade.currency, new_fees);
         let token = get_usdc_token(&env)?;
         let token_client = TokenClient::new(&env, &token);
         token_client.transfer(&env.current_contract_address(), &recipient, &(payout as i128));
@@ -316,9 +372,18 @@ impl StellarEscrowContract {
         get_trade(&env, trade_id)
     }
 
-    /// Get accumulated fees
+    /// Get accumulated fees (USDC only — backward-compatible)
     pub fn get_accumulated_fees(env: Env) -> Result<u64, ContractError> {
-        get_accumulated_fees(&env)
+        if !is_initialized(&env) {
+            return Err(ContractError::NotInitialized);
+        }
+        let usdc = get_usdc_token(&env)?;
+        Ok(get_currency_fees(&env, &usdc))
+    }
+
+    /// Get accumulated fees for a specific currency
+    pub fn get_fees_for_currency(env: Env, currency: Address) -> u64 {
+        get_currency_fees(&env, &currency)
     }
 
     /// Check if arbitrator is registered
@@ -526,6 +591,7 @@ impl StellarEscrowContract {
             fee,
             arbitrator: terms.default_arbitrator,
             status: TradeStatus::Created,
+            currency: get_usdc_token(&env)?,
             metadata: terms.default_metadata,
         };
 

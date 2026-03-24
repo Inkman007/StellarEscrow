@@ -88,6 +88,10 @@ pub struct Trade {
     pub fee: u64,
     pub arbitrator: Option<Address>,
     pub status: TradeStatus,
+    /// Token address used for this trade (e.g. USDC, EURC, or any SAC token)
+    pub currency: Address,
+    /// Optional structured metadata (product info, shipping details, etc.)
+    pub metadata: Option<TradeMetadata>,
     pub metadata: OptionalMetadata,
 }
 
