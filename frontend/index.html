@@ -59,6 +59,29 @@
                     <li role="none"><a href="#api-docs" role="menuitem" class="nav-link">API Documentation</a></li>
                 </ul>
                 
+                <!-- Notifications -->
+                <div class="notification-controls">
+                    <button 
+                        id="notification-center-btn"
+                        type="button"
+                        class="btn btn-icon"
+                        aria-label="Notification center"
+                        aria-expanded="false"
+                        aria-controls="notification-center"
+                    >
+                        🔔
+                        <span id="notification-badge" class="notification-badge" hidden>0</span>
+                    </button>
+                    <button 
+                        id="notification-prefs-btn"
+                        type="button"
+                        class="btn btn-icon"
+                        aria-label="Notification preferences"
+                    >
+                        ⚙️
+                    </button>
+                </div>
+                
                 <!-- Wallet Connection -->
                 <div id="wallet-container" class="wallet-container" role="region" aria-label="Wallet connection">
                     <button 
@@ -658,6 +681,122 @@
             </div>
         </section>
 
+        <!-- Notification Center -->
+        <div id="notification-center" class="notification-center" hidden role="region" aria-label="Notification center">
+            <div class="notification-center-header">
+                <h3>Notifications</h3>
+                <button 
+                    type="button"
+                    class="btn btn-close"
+                    id="notification-center-close"
+                    aria-label="Close notification center"
+                >
+                    ✕
+                </button>
+            </div>
+            <div class="notification-center-list">
+                <p class="empty-state">No notifications</p>
+            </div>
+        </div>
+
+        <!-- Notification Preferences Modal -->
+        <div id="notification-prefs-modal" class="modal" hidden role="dialog" aria-labelledby="notification-prefs-title" aria-modal="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="notification-prefs-title">Notification Preferences</h3>
+                    <button 
+                        type="button"
+                        class="btn btn-close"
+                        id="notification-prefs-close"
+                        aria-label="Close dialog"
+                    >
+                        ✕
+                    </button>
+                </div>
+
+                <form id="notification-prefs-form" class="notification-prefs-form">
+                    <div class="form-section">
+                        <h4>Notification Types</h4>
+                        
+                        <label class="checkbox-label">
+                            <input 
+                                type="checkbox"
+                                id="pref-trade-updates"
+                                checked
+                            >
+                            <span>Trade Updates</span>
+                        </label>
+
+                        <label class="checkbox-label">
+                            <input 
+                                type="checkbox"
+                                id="pref-disputes"
+                                checked
+                            >
+                            <span>Disputes</span>
+                        </label>
+
+                        <label class="checkbox-label">
+                            <input 
+                                type="checkbox"
+                                id="pref-arbitration"
+                                checked
+                            >
+                            <span>Arbitration</span>
+                        </label>
+                    </div>
+
+                    <div class="form-section">
+                        <h4>Notification Channels</h4>
+                        
+                        <label class="checkbox-label">
+                            <input 
+                                type="checkbox"
+                                id="pref-push"
+                            >
+                            <span>Push Notifications</span>
+                        </label>
+                        <button 
+                            type="button"
+                            id="request-push-permission"
+                            class="btn btn-sm btn-secondary"
+                        >
+                            Enable Push
+                        </button>
+
+                        <label class="checkbox-label">
+                            <input 
+                                type="checkbox"
+                                id="pref-email"
+                            >
+                            <span>Email Notifications</span>
+                        </label>
+
+                        <input 
+                            type="email"
+                            id="pref-email-address"
+                            class="form-input"
+                            placeholder="your@email.com"
+                            aria-label="Email address for notifications"
+                        >
+                    </div>
+
+                    <div class="form-actions">
+                        <button 
+                            type="submit"
+                            class="btn btn-primary"
+                            aria-label="Save preferences"
+                        >
+                            Save Preferences
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Notification Toast Container -->
+        <div id="notification-toast-container" class="notification-toast-container" role="region" aria-label="Notifications" aria-live="polite"></div>
+
         <!-- API Documentation Section -->
         <section id="api-docs" aria-labelledby="api-docs-heading" class="section">
             <div class="container">
@@ -804,6 +943,7 @@
     <script src="wallet.js"></script>
     <script src="disputes.js"></script>
     <script src="arbitrator.js"></script>
+    <script src="notifications.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

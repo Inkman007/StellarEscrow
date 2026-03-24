@@ -991,6 +991,13 @@
             window.ArbitratorDashboard.initArbitratorDashboard();
         }
 
+        // Initialize notifications
+        if (window.NotificationManager) {
+            window.NotificationManager.initNotificationUI();
+            window.NotificationManager.loadPreferences();
+            window.NotificationManager.connectWebSocket();
+        }
+
         // Initialize high contrast toggle
         const contrastToggle = $('#contrast-toggle');
         if (contrastToggle) {
