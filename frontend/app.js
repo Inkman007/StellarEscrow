@@ -5,6 +5,7 @@
 
 import { setLocale, getLocale, formatCurrency, formatDate } from './i18n.js';
 import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallable, subscribePush } from './pwa.js';
+import { observeWebVitals, initLazyRoutes, prefetchOnIdle, cachedFetch, invalidateCache } from './performance.js';
 
 (function() {
     'use strict';
@@ -107,8 +108,7 @@ import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallab
     // ============================================
     async function fetchHealth() {
         try {
-            const response = await fetch(`${CONFIG.apiBaseUrl}/health`);
-            const data = await response.json();
+            const data = await cachedFetch(`${CONFIG.apiBaseUrl}/health`, {}, 60_000);
             updateHealthStatus(data);
             return data;
         } catch (error) {
@@ -127,9 +127,7 @@ import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallab
         queryParams.set('offset', (state.currentPage - 1) * state.pageSize);
 
         try {
-            const response = await fetch(`${CONFIG.apiBaseUrl}/events?${queryParams}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
+            const data = await cachedFetch(`${CONFIG.apiBaseUrl}/events?${queryParams}`, {}, 15_000);
             state.events = data;
             state.totalEvents = data.length;
             renderEventsTable(data);
@@ -966,6 +964,11 @@ import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallab
     // ============================================
     async function init() {
         console.log('Initializing StellarEscrow Dashboard...');
+
+        // Performance monitoring
+        observeWebVitals();
+        initLazyRoutes();
+        prefetchOnIdle();
 
         // Load preferences
         loadHighContrastPreference();

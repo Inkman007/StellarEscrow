@@ -12,6 +12,12 @@
     <link rel="manifest" href="/manifest.json">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
     <title>StellarEscrow Dashboard</title>
+    <!-- Critical resource hints -->
+    <link rel="modulepreload" href="/app.js">
+    <link rel="modulepreload" href="/i18n.js">
+    <link rel="modulepreload" href="/pwa.js">
+    <link rel="modulepreload" href="/performance.js">
+    <link rel="preload" href="/styles.css" as="style">
     <link rel="stylesheet" href="styles.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -434,7 +440,7 @@
         </section>
 
         <!-- Disputes Section -->
-        <section id="disputes" aria-labelledby="disputes-heading" class="section">
+        <section id="disputes" aria-labelledby="disputes-heading" class="section" data-route="disputes">
             <div class="container">
                 <h2 id="disputes-heading" class="section-title">Dispute Management</h2>
                 
@@ -545,7 +551,7 @@
         </div>
 
         <!-- Arbitrator Dashboard Section -->
-        <section id="arbitrator" aria-labelledby="arbitrator-heading" class="section">
+        <section id="arbitrator" aria-labelledby="arbitrator-heading" class="section" data-route="arbitrator">
             <div class="container">
                 <h2 id="arbitrator-heading" class="section-title">Arbitrator Dashboard</h2>
                 
@@ -972,9 +978,6 @@
     <div id="toast-container" class="toast-container" role="alert" aria-live="assertive" aria-label="Notifications"></div>
 
     <script src="wallet.js"></script>
-    <script src="disputes.js"></script>
-    <script src="arbitrator.js"></script>
-    <script src="notifications.js"></script>
-    <script src="app.js"></script>
+    <script type="module" src="app.js"></script>
 </body>
 </html>
