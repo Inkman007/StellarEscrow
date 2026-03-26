@@ -4,6 +4,10 @@
  */
 
 import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallable, subscribePush } from './pwa.js';
+import { setLocale, getLocale, formatCurrency, formatDate } from './i18n.js';
+import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallable, subscribePush } from './pwa.js';
+import { observeWebVitals, initLazyRoutes, prefetchOnIdle, cachedFetch, invalidateCache } from './performance.js';
+import { initErrorBoundary, reportError, friendlyMessage, withRetry, showErrorUI, logError } from './error-handler.js';
 
 (function() {
     'use strict';
@@ -106,8 +110,7 @@ import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallab
     // ============================================
     async function fetchHealth() {
         try {
-            const response = await fetch(`${CONFIG.apiBaseUrl}/health`);
-            const data = await response.json();
+            const data = await cachedFetch(`${CONFIG.apiBaseUrl}/health`, {}, 60_000);
             updateHealthStatus(data);
             return data;
         } catch (error) {
@@ -126,18 +129,24 @@ import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallab
         queryParams.set('offset', (state.currentPage - 1) * state.pageSize);
 
         try {
-            const response = await fetch(`${CONFIG.apiBaseUrl}/events?${queryParams}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
+            const data = await withRetry(
+                () => cachedFetch(`${CONFIG.apiBaseUrl}/events?${queryParams}`, {}, 15_000),
+                {
+                    maxAttempts: 3,
+                    onRetry: (attempt) => showToast(`Retrying… (${attempt}/3)`, 'warning'),
+                }
+            );
             state.events = data;
             state.totalEvents = data.length;
             renderEventsTable(data);
             announce(`Loaded ${data.length} events`);
             return data;
         } catch (error) {
-            console.error('Failed to fetch events:', error);
-            showToast('Failed to load events', 'error');
-            announce('Failed to load events', 'assertive');
+            logError('Failed to fetch events', { error: error?.message });
+            reportError(error, { context: 'fetchEvents' });
+            const msg = friendlyMessage(error);
+            showErrorUI(msg, { retryFn: () => fetchEvents(params) });
+            announce(msg, 'assertive');
             return [];
         }
     }
@@ -966,6 +975,14 @@ import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallab
     async function init() {
         console.log('Initializing StellarEscrow Dashboard...');
 
+        // Error boundary — must be first
+        initErrorBoundary();
+
+        // Performance monitoring
+        observeWebVitals();
+        initLazyRoutes();
+        prefetchOnIdle();
+
         // Load preferences
         loadHighContrastPreference();
         loadSearchHistory();
@@ -1006,10 +1023,21 @@ import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallab
             contrastToggle.addEventListener('click', toggleHighContrast);
         }
 
+        // Initialize language switcher
+        const langSelect = $('#lang-select');
+        if (langSelect) {
+            langSelect.value = getLocale();
+            langSelect.addEventListener('change', (e) => {
+                setLocale(e.target.value);
+                announce(document.documentElement.lang === 'ar' ? 'تم تغيير اللغة' : 'Language changed');
+            });
+        }
+
         // Initialize PWA
         const swReg = await registerServiceWorker();
         initOfflineIndicator();
 
+        // Install banner
         document.addEventListener('pwa:installable', () => {
             const banner = $('#install-banner');
             if (banner) banner.hidden = false;
@@ -1022,6 +1050,7 @@ import { registerServiceWorker, initOfflineIndicator, promptInstall, isInstallab
             $('#install-banner').hidden = true;
         });
 
+        // Push notifications (subscribe after SW ready)
         if (swReg) {
             document.addEventListener('pwa:push-subscribe', async () => {
                 await subscribePush(swReg);
