@@ -10,9 +10,9 @@ use uuid::Uuid;
 use crate::config::StellarConfig;
 use crate::database::Database;
 use crate::error::AppError;
+use crate::fraud_service::FraudDetectionService;
 use crate::models::{Event, WebSocketMessage};
 use crate::websocket::WebSocketManager;
-use crate::fraud_service::FraudDetectionService;
 
 #[derive(Debug, Deserialize)]
 struct HorizonResponse<T> {
@@ -86,11 +86,18 @@ impl EventMonitor {
     }
 
     pub async fn start(&mut self) -> Result<(), AppError> {
-        info!("Starting event monitor for contract {}", self.config.contract_id);
+        info!(
+            "Starting event monitor for contract {}",
+            self.config.contract_id
+        );
 
         // Get the latest ledger from database if not specified in config
         if self.last_ledger.is_none() {
-            match self.database.get_latest_ledger(&self.config.contract_id).await? {
+            match self
+                .database
+                .get_latest_ledger(&self.config.contract_id)
+                .await?
+            {
                 Some(ledger) => {
                     info!("Resuming from ledger {}", ledger);
                     self.last_ledger = Some(ledger);
@@ -119,10 +126,15 @@ impl EventMonitor {
             return Ok(()); // No new ledgers
         }
 
-        info!("Polling events from ledger {} to {}", start_ledger, latest_ledger);
+        info!(
+            "Polling events from ledger {} to {}",
+            start_ledger, latest_ledger
+        );
 
         // Get effects for the contract
-        let effects = self.get_contract_effects(start_ledger, latest_ledger).await?;
+        let effects = self
+            .get_contract_effects(start_ledger, latest_ledger)
+            .await?;
 
         for effect in effects {
             if let Some(event) = self.parse_effect_to_event(effect).await? {
@@ -152,13 +164,15 @@ impl EventMonitor {
                         warn!("Trade ID: {}", report.trade_id);
                         warn!("Score: {}/100", report.risk_score);
                         warn!("Rules: {:?}", report.rules_triggered);
-                        
+
                         // Emit a special "fraud_alert" websocket message for real-time dashboard updates
-                        self.ws_manager.broadcast(WebSocketMessage {
-                            event_type: "fraud_alert".to_string(),
-                            data: serde_json::to_value(&report).unwrap_or_default(),
-                            timestamp: Utc::now(),
-                        }).await;
+                        self.ws_manager
+                            .broadcast(WebSocketMessage {
+                                event_type: "fraud_alert".to_string(),
+                                data: serde_json::to_value(&report).unwrap_or_default(),
+                                timestamp: Utc::now(),
+                            })
+                            .await;
                     }
                 }
 
@@ -180,7 +194,11 @@ impl EventMonitor {
         Ok(response._embedded.records[0].sequence)
     }
 
-    async fn get_contract_effects(&self, from_ledger: i64, to_ledger: i64) -> Result<Vec<Effect>, AppError> {
+    async fn get_contract_effects(
+        &self,
+        from_ledger: i64,
+        to_ledger: i64,
+    ) -> Result<Vec<Effect>, AppError> {
         let mut all_effects = Vec::new();
         let mut cursor = None;
 
@@ -194,7 +212,8 @@ impl EventMonitor {
                 url.push_str(&format!("&cursor={}", c));
             }
 
-            let response: HorizonResponse<Effect> = self.client.get(&url).send().await?.json().await?;
+            let response: HorizonResponse<Effect> =
+                self.client.get(&url).send().await?.json().await?;
 
             let next = response._links.next.is_none();
             let last_id = response._embedded.records.last().map(|r| r.id.clone());
@@ -265,10 +284,14 @@ impl EventMonitor {
         // Effect IDs are in format: <ledger>-<transaction>-<operation>-<effect>
         let parts: Vec<&str> = effect_id.split('-').collect();
         if parts.len() < 1 {
-            return Err(AppError::InvalidEventData("Invalid effect ID format".to_string()));
+            return Err(AppError::InvalidEventData(
+                "Invalid effect ID format".to_string(),
+            ));
         }
 
-        parts[0].parse().map_err(|_| AppError::InvalidEventData("Invalid ledger in effect ID".to_string()))
+        parts[0]
+            .parse()
+            .map_err(|_| AppError::InvalidEventData("Invalid ledger in effect ID".to_string()))
     }
 
     async fn get_transaction_hash_for_effect(&self, effect_id: &str) -> Result<String, AppError> {

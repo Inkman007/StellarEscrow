@@ -74,9 +74,7 @@ fn set_header(headers: &mut axum::http::HeaderMap, name: &'static str, value: u6
 // ---------------------------------------------------------------------------
 
 /// GET /admin/rate-limits — monitoring snapshot
-pub async fn get_rate_limit_stats(
-    State(limiter): State<Arc<RateLimiter>>,
-) -> impl IntoResponse {
+pub async fn get_rate_limit_stats(State(limiter): State<Arc<RateLimiter>>) -> impl IntoResponse {
     Json(limiter.snapshot().await)
 }
 

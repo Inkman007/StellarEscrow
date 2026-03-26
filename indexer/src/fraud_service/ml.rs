@@ -1,7 +1,7 @@
-use smartcore::ensemble::random_forest_regressor::RandomForestRegressor;
-use smartcore::linalg::basic::matrix::DenseMatrix;
-use smartcore::linalg::basic::arrays::Array1;
 use serde::{Deserialize, Serialize};
+use smartcore::ensemble::random_forest_regressor::RandomForestRegressor;
+use smartcore::linalg::basic::arrays::Array1;
+use smartcore::linalg::basic::matrix::DenseMatrix;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MLResult {

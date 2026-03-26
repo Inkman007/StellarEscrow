@@ -20,40 +20,40 @@ mod database;
 mod error;
 mod event_monitor;
 mod file_handlers;
+mod fraud_service;
 mod gateway;
 mod handlers;
 mod health;
 mod help;
+mod integration_service;
 mod models;
+mod notification_service;
 mod rate_limit;
 mod rate_limit_handlers;
 mod storage;
 mod websocket;
-mod fraud_service;
-mod notification_service;
-mod integration_service;
 
 #[cfg(test)]
 mod test;
 
+use auth::auth_middleware;
 use config::Config;
 use database::Database;
 use event_monitor::EventMonitor;
-use auth::auth_middleware;
+use file_handlers::{delete_file, download_file, list_files, upload_file};
+use fraud_service::FraudDetectionService;
 use gateway::{GatewayConfig, GatewayState};
 use handlers::{AppState, *};
 use health::{liveness, HealthMonitor, HealthState};
-use file_handlers::{delete_file, download_file, list_files, upload_file};
+use help::{
+    get_contact, get_docs, get_faqs, get_tutorial_by_id, get_tutorials, help_index, search_help,
+};
+use integration_service::IntegrationService;
+use notification_service::NotificationService;
 use rate_limit::RateLimiter;
 use rate_limit_handlers::*;
 use storage::StorageService;
 use websocket::WebSocketManager;
-use help::{
-    get_contact, get_docs, get_faqs, get_tutorial_by_id, get_tutorials, help_index, search_help,
-};
-use fraud_service::FraudDetectionService;
-use notification_service::NotificationService;
-use integration_service::IntegrationService;
 
 #[derive(Parser)]
 #[command(name = "stellar-escrow-indexer")]
@@ -78,10 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load(&args.config)?;
     info!(
         "Loaded configuration from {} | env={} version={} schema_v={}",
-        args.config,
-        config.meta.environment,
-        config.meta.version,
-        config.meta.schema_version,
+        args.config, config.meta.environment, config.meta.version, config.meta.schema_version,
     );
 
     // Initialize database with tuned connection pool
@@ -115,10 +112,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize rate limiter
     let rate_limiter = Arc::new(RateLimiter::new(config.rate_limit.clone()));
-    
+
     // Initialize API auth config
     let auth_config = Arc::new(config.auth.clone());
-    
+
     // Initialize API gateway configuration
     // Gateway provides centralized routing, load balancing, and authentication
     let gateway_config = GatewayConfig {
@@ -128,11 +125,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         transform_responses: true,
     };
     let gateway_state = Arc::new(GatewayState::new(gateway_config, auth_config.clone()));
-    
+
     // Initialize file storage service
-    let storage_service = Arc::new(
-        StorageService::new(db_pool, &config.storage.base_dir).await?,
-    );
+    let storage_service = Arc::new(StorageService::new(db_pool, &config.storage.base_dir).await?);
     // Initialize Fraud Detection Service
     let fraud_service = Arc::new(FraudDetectionService::new(database.clone()).await);
 
@@ -168,8 +163,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build application with routes
     let admin_router = Router::new()
         .route("/admin/rate-limits", get(get_rate_limit_stats))
-        .route("/admin/rate-limits/whitelist", post(add_to_whitelist).delete(remove_from_whitelist))
-        .route("/admin/rate-limits/blacklist", post(add_to_blacklist).delete(remove_from_blacklist))
+        .route(
+            "/admin/rate-limits/whitelist",
+            post(add_to_whitelist).delete(remove_from_whitelist),
+        )
+        .route(
+            "/admin/rate-limits/blacklist",
+            post(add_to_blacklist).delete(remove_from_blacklist),
+        )
         .route("/admin/rate-limits/tier", post(set_ip_tier))
         .with_state(rate_limiter.clone());
     let file_router = Router::new()
@@ -220,7 +221,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/fraud/alerts", get(get_fraud_alerts))
         .route("/fraud/review", post(update_fraud_review))
         // Notifications
-        .route("/notifications/preferences/:address", get(get_notification_preferences).put(upsert_notification_preferences))
+        .route(
+            "/notifications/preferences/:address",
+            get(get_notification_preferences).put(upsert_notification_preferences),
+        )
         .route("/notifications/log/:address", get(get_notification_log))
         // Integrations
         .route("/integrations/stats", get(get_integration_stats))
@@ -250,9 +254,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             integration_service,
         })
         // Apply gateway middleware for centralized routing and auth
-        .layer(middleware::from_fn_with_state(gateway_state.clone(), gateway::gateway_middleware))
+        .layer(middleware::from_fn_with_state(
+            gateway_state.clone(),
+            gateway::gateway_middleware,
+        ))
         // Apply rate limiting middleware
-        .layer(middleware::from_fn_with_state(rate_limiter, rate_limit_middleware))
+        .layer(middleware::from_fn_with_state(
+            rate_limiter,
+            rate_limit_middleware,
+        ))
         .layer(CorsLayer::permissive());
 
     // Start server
@@ -260,7 +270,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting server on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     // Wait for monitor to finish (shouldn't happen in normal operation)
     monitor_handle.await?;

@@ -123,8 +123,7 @@ impl IntegrationService {
     // -----------------------------------------------------------------------
 
     fn should_forward(&self, connector: &ConnectorConfig, event: &Event) -> bool {
-        connector.event_filter.is_empty()
-            || connector.event_filter.contains(&event.event_type)
+        connector.event_filter.is_empty() || connector.event_filter.contains(&event.event_type)
     }
 
     async fn record_delivery(&self, record: &DeliveryRecord) {

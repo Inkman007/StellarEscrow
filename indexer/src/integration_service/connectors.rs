@@ -16,9 +16,7 @@ pub async fn deliver(
 ) -> DeliveryRecord {
     let start = Instant::now();
     let result = match connector.kind {
-        ConnectorKind::Webhook | ConnectorKind::Http => {
-            send_http(http, connector, event).await
-        }
+        ConnectorKind::Webhook | ConnectorKind::Http => send_http(http, connector, event).await,
     };
     let duration_ms = start.elapsed().as_millis() as u64;
 
