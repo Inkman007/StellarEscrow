@@ -349,13 +349,11 @@ pub async fn get_tutorial_by_id(
 
 /// GET /help/docs?category=<optional>
 pub async fn get_docs(Query(params): Query<SearchQuery>) -> Json<serde_json::Value> {
-    let articles: Vec<&&HelpArticle> = DOCS
+    let articles: Vec<&HelpArticle> = DOCS
         .iter()
         .filter(|a| {
             params.category.as_deref().map_or(true, |c| a.category == c)
         })
-        .collect::<Vec<_>>()
-        .iter()
         .collect();
 
     let categories: std::collections::HashSet<&str> = DOCS.iter().map(|a| a.category).collect();

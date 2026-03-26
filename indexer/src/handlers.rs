@@ -3,10 +3,12 @@ use axum::{
     http::StatusCode,
     response::{Json, Response},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::database::Database;
 use crate::error::AppError;
 use crate::fraud_service::FraudDetectionService;
 use crate::health::HealthState;
@@ -93,7 +95,7 @@ pub async fn get_events(
 
     Ok(Json(PaginatedResponse {
         has_more: offset + limit < total,
-        items: events,
+        data: events,
         total,
         limit,
         offset,
@@ -343,6 +345,7 @@ pub struct AppState {
     pub fraud_service: Arc<FraudDetectionService>,
     pub notification_service: Arc<crate::notification_service::NotificationService>,
     pub gateway: Arc<crate::gateway::GatewayState>,
+    pub integration_service: Arc<crate::integration_service::IntegrationService>,
 }
 
 // =============================================================================
@@ -445,4 +448,36 @@ pub async fn gateway_stats(
     Ok(Json(serde_json::to_value(stats).map_err(|e| {
         AppError::Internal(format!("Failed to serialize gateway stats: {}", e))
     })?))
+}
+
+// =============================================================================
+// Integration Service Handlers
+// =============================================================================
+
+/// GET /integrations/stats — connector monitoring stats
+pub async fn get_integration_stats(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    let stats = state.integration_service.get_stats().await;
+    Json(serde_json::to_value(stats).unwrap_or_default())
+}
+
+/// GET /integrations/log?connector_id=&limit= — delivery log
+pub async fn get_integration_log(
+    Query(params): Query<IntegrationLogQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::integration_service::DeliveryRecord>>, AppError> {
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
+    let records = state
+        .integration_service
+        .get_delivery_log(params.connector_id.as_deref(), limit)
+        .await
+        .map_err(AppError::Database)?;
+    Ok(Json(records))
+}
+
+#[derive(serde::Deserialize)]
+pub struct IntegrationLogQuery {
+    pub connector_id: Option<String>,
+    pub limit: Option<i64>,
 }

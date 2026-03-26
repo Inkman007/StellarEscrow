@@ -9,6 +9,38 @@ use crate::models::{
     TradeSearchQuery, TradeSearchResult,
 };
 use crate::fraud_service::FraudReport;
+use crate::integration_service::{DeliveryRecord, DeliveryStatus};
+
+// ---------------------------------------------------------------------------
+// Row helper for integration_deliveries
+// ---------------------------------------------------------------------------
+
+#[derive(sqlx::FromRow)]
+struct IntegrationDeliveryRow {
+    id: Uuid,
+    connector_id: String,
+    event_id: Uuid,
+    status: String,
+    status_code: Option<i32>,
+    error: Option<String>,
+    duration_ms: i64,
+    attempted_at: DateTime<Utc>,
+}
+
+impl From<IntegrationDeliveryRow> for DeliveryRecord {
+    fn from(r: IntegrationDeliveryRow) -> Self {
+        DeliveryRecord {
+            id: r.id,
+            connector_id: r.connector_id,
+            event_id: r.event_id,
+            status: if r.status == "success" { DeliveryStatus::Success } else { DeliveryStatus::Failed },
+            status_code: r.status_code.map(|c| c as u16),
+            error: r.error,
+            duration_ms: r.duration_ms as u64,
+            attempted_at: r.attempted_at,
+        }
+    }
+}
 
 pub struct Database {
     pool: PgPool,
@@ -42,44 +74,46 @@ impl Database {
     }
 
     pub async fn get_events(&self, query: &EventQuery) -> Result<Vec<Event>, AppError> {
-        let mut sql = String::from("SELECT id, event_type, contract_id, ledger, transaction_hash, timestamp, data, created_at FROM events WHERE 1=1");
-        
-        // Add conditions and collect owned String values
-        let mut params: Vec<String> = Vec::new();
-        
-        if let Some(ref event_type) = query.event_type {
-            sql.push_str(&format!(" AND event_type = ${}", params.len() + 1));
-            params.push(event_type.clone());
+        let mut sql = "SELECT id, event_type, contract_id, ledger, transaction_hash, timestamp, data, created_at FROM events WHERE 1=1".to_string();
+        let mut owned: Vec<String> = vec![];
+        let mut str_bindings: Vec<&str> = vec![];
+
+        if let Some(event_type) = &query.event_type {
+            sql.push_str(&format!(" AND event_type = ${}", str_bindings.len() + 1));
+            owned.push(event_type.clone());
         }
-        
+
         if let Some(trade_id) = query.trade_id {
-            sql.push_str(&format!(" AND (data->>'trade_id')::BIGINT = ${}", params.len() + 1));
-            params.push(trade_id.to_string());
+            sql.push_str(&format!(" AND data->>'trade_id' = ${}", owned.len() + 1));
+            owned.push(trade_id.to_string());
         }
-        
+
         if let Some(from_ledger) = query.from_ledger {
-            sql.push_str(&format!(" AND ledger >= ${}", params.len() + 1));
-            params.push(from_ledger.to_string());
+            sql.push_str(&format!(" AND ledger >= ${}", owned.len() + 1));
+            owned.push(from_ledger.to_string());
         }
-        
+
         if let Some(to_ledger) = query.to_ledger {
-            sql.push_str(&format!(" AND ledger <= ${}", params.len() + 1));
-            params.push(to_ledger.to_string());
+            sql.push_str(&format!(" AND ledger <= ${}", owned.len() + 1));
+            owned.push(to_ledger.to_string());
         }
-        
+
+        sql.push_str(" ORDER BY ledger DESC, timestamp DESC");
+
         if let Some(limit) = query.limit {
             sql.push_str(&format!(" LIMIT {}", limit));
         }
-        
+
         if let Some(offset) = query.offset {
             sql.push_str(&format!(" OFFSET {}", offset));
         }
-        
-        let mut query_builder = sqlx::query_as::<_, Event>(&sql);
-        for param in params {
-            query_builder = query_builder.bind(param);
+
+        let mut query_builder = sqlx::query(&sql);
+
+        for s in &owned {
+            query_builder = query_builder.bind(s.as_str());
         }
-        
+
         let rows = query_builder.fetch_all(&self.pool).await?;
 
         let events = rows
@@ -876,4 +910,69 @@ impl Database {
         .await?;
         Ok(rows)
     }
+
+    // -----------------------------------------------------------------------
+    // Integration service
+    // -----------------------------------------------------------------------
+
+    pub async fn insert_integration_delivery(
+        &self,
+        record: &crate::integration_service::DeliveryRecord,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO integration_deliveries
+                (id, connector_id, event_id, status, status_code, error, duration_ms, attempted_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "#,
+        )
+        .bind(record.id)
+        .bind(&record.connector_id)
+        .bind(record.event_id)
+        .bind(format!("{:?}", record.status).to_lowercase())
+        .bind(record.status_code.map(|c| c as i32))
+        .bind(&record.error)
+        .bind(record.duration_ms as i64)
+        .bind(record.attempted_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_integration_deliveries(
+        &self,
+        connector_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<crate::integration_service::DeliveryRecord>, sqlx::Error> {
+        let rows = if let Some(cid) = connector_id {
+            sqlx::query_as::<_, IntegrationDeliveryRow>(
+                r#"
+                SELECT id, connector_id, event_id, status, status_code, error, duration_ms, attempted_at
+                FROM integration_deliveries
+                WHERE connector_id = $1
+                ORDER BY attempted_at DESC
+                LIMIT $2
+                "#,
+            )
+            .bind(cid)
+            .bind(limit.clamp(1, 200))
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as::<_, IntegrationDeliveryRow>(
+                r#"
+                SELECT id, connector_id, event_id, status, status_code, error, duration_ms, attempted_at
+                FROM integration_deliveries
+                ORDER BY attempted_at DESC
+                LIMIT $1
+                "#,
+            )
+            .bind(limit.clamp(1, 200))
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        Ok(rows.into_iter().map(|r| r.into()).collect())
+    }
+
 }

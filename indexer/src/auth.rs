@@ -18,7 +18,7 @@ fn normalize_api_key(value: &str) -> Option<&str> {
 
 pub async fn auth_middleware(
     State(auth_config): State<Arc<AuthConfig>>,
-    mut req: Request<Body>,
+    req: Request<Body>,
     next: Next,
 ) -> Response {
     let path = req.uri().path();

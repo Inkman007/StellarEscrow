@@ -21,6 +21,7 @@ pub struct Config {
     #[serde(default)]
     pub cache: CacheConfig,
     pub gateway: GatewayConfig,
+    pub integration: IntegrationConfig,
 }
 
 /// Metadata section — version tracking for the config itself.
@@ -75,14 +76,7 @@ pub struct CacheConfig {
 
 fn default_cache_ttl() -> u64 { 30 }
 fn default_events_ttl() -> u64 { 10 }
-    #[serde(default = "default_max_connections")]
-    pub max_connections: u32,
-    #[serde(default = "default_connect_timeout")]
-    pub connect_timeout_seconds: u64,
-}
 
-fn default_max_connections() -> u32 { 10 }
-fn default_connect_timeout() -> u64 { 30 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StellarConfig {
@@ -105,7 +99,7 @@ pub struct RateLimitConfig {
     pub blacklist: Vec<IpAddr>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AuthConfig {
     #[serde(default)]
     pub api_keys: Vec<String>,
@@ -179,6 +173,41 @@ impl Default for GatewayConfig {
             service_instances: vec![],
         }
     }
+}
+
+// Integration config
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectorKind {
+    Webhook,
+    Http,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectorConfig {
+    pub id: String,
+    pub name: String,
+    pub kind: ConnectorKind,
+    pub url: String,
+    #[serde(default)]
+    pub auth_token: Option<String>,
+    /// Event types to forward; empty means all events.
+    #[serde(default)]
+    pub event_filter: Vec<String>,
+    #[serde(default = "default_connector_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_connector_timeout() -> u64 {
+    10
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IntegrationConfig {
+    #[serde(default)]
+    pub connectors: Vec<ConnectorConfig>,
 }
 
 impl Config {
@@ -337,6 +366,8 @@ impl Default for Config {
                 push_server_key: String::new(),
             },
             gateway: GatewayConfig::default(),
+
+            integration: IntegrationConfig::default(),
         }
     }
 }

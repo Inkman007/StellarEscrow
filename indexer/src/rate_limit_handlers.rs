@@ -62,11 +62,10 @@ pub async fn rate_limit_middleware(
 }
 
 fn set_header(headers: &mut axum::http::HeaderMap, name: &'static str, value: u64) {
-    if let (Ok(n), Ok(v)) = (
-        HeaderName::from_static(name),
-        HeaderValue::from_str(&value.to_string()),
-    ) {
-        headers.insert(n, v);
+    if let Ok(v) = HeaderValue::from_str(&value.to_string()) {
+        if let Ok(n) = axum::http::HeaderName::from_bytes(name.as_bytes()) {
+            headers.insert(n, v);
+        }
     }
 }
 

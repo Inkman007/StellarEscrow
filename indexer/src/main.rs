@@ -2,13 +2,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{FromRef, State},
+    middleware,
     response::Json,
     routing::{delete, get, post},
-    extract::FromRef,
-    middleware,
-    routing::{delete, get, post},
-    routing::{get, post},
     Router,
 };
 use clap::Parser;
@@ -35,6 +32,7 @@ mod storage;
 mod websocket;
 mod fraud_service;
 mod notification_service;
+mod integration_service;
 
 #[cfg(test)]
 mod test;
@@ -57,6 +55,7 @@ use help::{
 };
 use fraud_service::FraudDetectionService;
 use notification_service::NotificationService;
+use integration_service::IntegrationService;
 
 #[derive(Parser)]
 #[command(name = "stellar-escrow-indexer")]
@@ -145,13 +144,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.notification.clone(),
     ));
 
+    // Initialize Integration Service
+    let integration_service = Arc::new(IntegrationService::new(
+        database.clone(),
+        config.integration.clone(),
+    ));
+
     // Initialize event monitor
-    let event_monitor = EventMonitor::new(
+    let mut event_monitor = EventMonitor::new(
         config.stellar.clone(),
         database.clone(),
         ws_manager.clone(),
         fraud_service.clone(),
         notification_service.clone(),
+        integration_service.clone(),
     );
 
     // Start event monitoring in background
@@ -200,11 +206,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/", get(api_index))
         .route("/health", get(liveness))
         .route("/health/live", get(liveness))
-        .route("/health/ready", get(readiness))
-        .route("/health/metrics", get(metrics))
-        .route("/health/alerts", get(alerts))
-        .route("/status", get(status_page))
-        .route("/health", get(health_check))
         .route("/status", get(get_status))
         .route("/stats", get(get_stats))
         .route("/events", get(get_events))
@@ -223,6 +224,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Notifications
         .route("/notifications/preferences/:address", get(get_notification_preferences).put(upsert_notification_preferences))
         .route("/notifications/log/:address", get(get_notification_log))
+        // Integrations
+        .route("/integrations/stats", get(get_integration_stats))
+        .route("/integrations/log", get(get_integration_log))
         .route("/ws", get(ws_handler))
         .route("/help", get(help_index))
         .route("/help/faqs", get(get_faqs))
@@ -245,6 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             fraud_service,
             notification_service,
             gateway: gateway_state.clone(),
+            integration_service,
         })
         // Apply gateway middleware for centralized routing and auth
         .layer(middleware::from_fn_with_state(gateway_state.clone(), gateway::gateway_middleware))

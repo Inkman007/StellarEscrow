@@ -1,5 +1,6 @@
 use smartcore::ensemble::random_forest_regressor::RandomForestRegressor;
 use smartcore::linalg::basic::matrix::DenseMatrix;
+use smartcore::linalg::basic::arrays::Array1;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -10,7 +11,7 @@ pub struct MLResult {
 
 pub struct MLAnalyzer {
     // In a real scenario, this would be a pre-trained model loaded from a file
-    model: Option<RandomForestRegressor<f32, DenseMatrix<f32>>>,
+    model: Option<RandomForestRegressor<f32, f32, DenseMatrix<f32>, Vec<f32>>>,
 }
 
 impl MLAnalyzer {
