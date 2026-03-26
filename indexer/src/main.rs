@@ -32,6 +32,9 @@ mod rate_limit;
 mod rate_limit_handlers;
 mod storage;
 mod websocket;
+mod fraud_service;
+mod notification_service;
+mod performance_service;
 
 #[cfg(test)]
 mod test;
@@ -50,6 +53,7 @@ use help::{
 };
 use integration_service::IntegrationService;
 use notification_service::NotificationService;
+use performance_service::PerformanceService;
 use rate_limit::RateLimiter;
 use rate_limit_handlers::*;
 use storage::StorageService;
@@ -137,6 +141,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.notification.clone(),
     ));
 
+    // Initialize Performance Monitoring Service
+    let performance_service = Arc::new(PerformanceService::new(database.clone()));
     // Initialize Integration Service
     let integration_service = Arc::new(IntegrationService::new(
         database.clone(),
@@ -226,6 +232,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(get_notification_preferences).put(upsert_notification_preferences),
         )
         .route("/notifications/log/:address", get(get_notification_log))
+        // Performance monitoring
+        .route("/performance/dashboard", get(get_performance_dashboard))
+        .route("/performance/alerts", get(get_performance_alerts))
         // Integrations
         .route("/integrations/stats", get(get_integration_stats))
         .route("/integrations/log", get(get_integration_log))
@@ -251,6 +260,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             fraud_service,
             notification_service,
             gateway: gateway_state.clone(),
+            performance_service,
             integration_service,
         })
         // Apply gateway middleware for centralized routing and auth
