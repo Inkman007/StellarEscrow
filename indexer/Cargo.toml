@@ -32,3 +32,4 @@ hex = "0.4"
 bytes = "1.0"
 smartcore = { version = "0.4", features = ["serde"] }
 smartcore = { version = "0.3", features = ["serde"] }
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
